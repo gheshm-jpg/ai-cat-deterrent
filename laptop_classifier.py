@@ -3,7 +3,7 @@ laptop-side cat classifier (laptop + arduino prototype version)
 
 waits for a "trigger" message from the arduino over usb serial,
 captures a frame from the laptop's webcam, classifies it using yolov8,
-and sends "fire" back to the arduino if a cat is found.
+and sends "FIRE" only when cat detection is allowed and dry-run is disabled.
 
 install deps:
     pip install ultralytics opencv-python pyserial
@@ -32,10 +32,10 @@ CONFIG = {
     "avoid_label": "person",
     "confidence_threshold": 0.7,  # 0.0-1.0, higher = fewer false positives
 
-    # testing mode: set to true to fire on a person instead of a cat, so you
-    # can test the full pipeline (sensor -> camera -> model -> servo) on
-    # yourself without needing an actual cat in frame. set false for real use.
-    "test_mode_human_only": True,
+    # Dry-run logs decisions and always sends SKIP; enable actuation explicitly.
+    "dry_run": True,
+    # Human detection demo is log-only, even when dry_run is disabled.
+    "test_mode_human_only": False,
 }
 
 
@@ -83,10 +83,13 @@ def classify_frame(model, frame, config):
 
 
 def should_fire_pump(detected_labels, config):
-    # decide whether to trigger the spray based on what was detected
+    # Human test mode never authorizes physical actuation.
     if config["test_mode_human_only"]:
-        return "person" in detected_labels
-    return config["target_label"] in detected_labels
+        return False
+    return (
+        config["target_label"] in detected_labels
+        and config["avoid_label"] not in detected_labels
+    )
 
 
 def handle_trigger(cam, model, ser, config):
@@ -100,11 +103,14 @@ def handle_trigger(cam, model, ser, config):
     detected_labels = classify_frame(model, frame, config)
     print(f"detected: {detected_labels}")
 
-    if should_fire_pump(detected_labels, config):
+    if config["test_mode_human_only"]:
+        print(f"human detection demo: {'person' in detected_labels}; actuation disabled")
+
+    if should_fire_pump(detected_labels, config) and not config.get("dry_run", True):
         print("cat detected -> sending fire")
         ser.write(b"FIRE\n")
     else:
-        print("no cat (or human present) -> sending skip")
+        print("dry-run, test mode, missing target, or person detected -> sending skip")
         ser.write(b"SKIP\n")
 
 
